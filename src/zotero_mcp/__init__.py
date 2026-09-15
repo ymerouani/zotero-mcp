@@ -4,6 +4,16 @@ Zotero MCP - Model Context Protocol server for Zotero
 This module provides tools for AI assistants to interact with Zotero libraries.
 """
 
+import os
+
+# PyMuPDF prints its `fitz` deprecation warning straight to stdout, which
+# corrupts the JSON-RPC stream of a stdio MCP server (a client sees an
+# unparseable line and reports malformed_response). Route all pymupdf
+# messages to stderr *before* anything can import it; setdefault keeps a
+# caller's explicit choice. PyMuPDF requires an fd:/path:/logging: prefix;
+# plain "0" raises an AssertionError at import.
+os.environ.setdefault("PYMUPDF_MESSAGE", "fd:2")
+
 from typing import TYPE_CHECKING
 
 from ._version import __version__ as __version__
