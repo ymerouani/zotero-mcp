@@ -217,6 +217,28 @@ def _preimport_semantic_search_on_main_thread() -> None:
     except Exception:
         pass  # best-effort: a failed pre-import must not stop the server
 
+    # #485 applies to torch's DLL chain too, not only numpy: the embedding
+    # provider constructors import sentence_transformers lazily, so without
+    # this the first semantic_search tool call imports torch on an AnyIO
+    # worker thread and wedges the same way (py-spy: importlib
+    # create_module on the worker, main thread idle). Pre-import here, on
+    # the main thread, for any install that could embed locally. API-only
+    # providers (openai/gemini) are skipped so they never pay torch.
+    provider_hint = os.environ.get("ZOTERO_EMBEDDING_MODEL") or ""
+    if not provider_hint:
+        try:
+            with open(str(_semantic_config_path(None))) as f:
+                provider_hint = str(
+                    json.load(f).get("semantic_search", {}).get("embedding_model", "")
+                )
+        except Exception:
+            pass
+    if provider_hint not in ("openai", "gemini"):
+        try:
+            import sentence_transformers  # noqa: F401
+        except Exception:
+            pass  # best-effort, same contract as above
+
 
 def _warmup_reranker_in_background() -> None:
     """Preload the reranker (if enabled) off the request path — see issue #283.
