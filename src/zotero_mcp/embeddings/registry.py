@@ -164,6 +164,7 @@ def _ollama_ef_factory(config: dict[str, Any]) -> Any:
 def _huggingface_ef_factory(config: dict[str, Any]) -> Any:
     return HuggingFaceEmbeddingFunction(
         model_name=config.get("model_name", "Qwen/Qwen3-Embedding-0.6B"),
+        device=config.get("device"),
     )
 
 

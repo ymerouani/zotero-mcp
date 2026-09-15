@@ -1,6 +1,7 @@
 """Local HuggingFace embedding function, backed by sentence-transformers."""
 
 import logging
+import os
 from typing import Any
 
 from chromadb import Documents, Embeddings
@@ -20,13 +21,22 @@ class HuggingFaceEmbeddingFunction(BaseEmbeddingFunction):
     collection's config (see OpenAIEmbeddingFunction for details).
     """
 
-    def __init__(self, model_name: str = "Qwen/Qwen3-Embedding-0.6B"):
+    def __init__(self, model_name: str = "Qwen/Qwen3-Embedding-0.6B", device: str | None = None):
         self.model_name = model_name
+        # Device placement: explicit config wins, then ZOTERO_EMBEDDING_DEVICE,
+        # then sentence-transformers' own auto-detection (upstream default).
+        # Set "cpu" to keep the CUDA device free for other GPU work (e.g. a
+        # local LLM server); a 0.6B embedder runs happily on CPU and the
+        # vector space is identical.
+        self.device = device or os.environ.get("ZOTERO_EMBEDDING_DEVICE") or None
 
         try:
             from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading embedding model: {model_name}")
-            self.model = SentenceTransformer(model_name, trust_remote_code=True)
+            logger.info(f"Loading embedding model: {model_name} (device={self.device or 'auto'})")
+            if self.device:
+                self.model = SentenceTransformer(model_name, trust_remote_code=True, device=self.device)
+            else:
+                self.model = SentenceTransformer(model_name, trust_remote_code=True)
         except ImportError:
             raise ImportError("sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers")
 
@@ -38,7 +48,7 @@ class HuggingFaceEmbeddingFunction(BaseEmbeddingFunction):
         return "huggingface"
 
     def get_config(self) -> dict[str, Any]:
-        return {
+        config = {
             "model_name": self.model_name,
             # ChromaDB's built-in "huggingface" EF requires api_key_env_var in
             # addition to model_name and asserts without it. Persisting the key
@@ -46,11 +56,15 @@ class HuggingFaceEmbeddingFunction(BaseEmbeddingFunction):
             # build_from_config ignores it (we embed locally, no API key).
             "api_key_env_var": "HUGGINGFACE_API_KEY",
         }
+        if self.device:
+            config["device"] = self.device
+        return config
 
     @staticmethod
     def build_from_config(config: dict[str, Any]) -> "HuggingFaceEmbeddingFunction":
         return HuggingFaceEmbeddingFunction(
             model_name=config.get("model_name", "Qwen/Qwen3-Embedding-0.6B"),
+            device=config.get("device"),
         )
 
     def __call__(self, input: Documents) -> Embeddings:
