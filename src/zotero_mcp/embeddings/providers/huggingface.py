@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 from typing import Any
 
 from chromadb import Documents, Embeddings
@@ -11,6 +12,12 @@ from zotero_mcp.embeddings.base import BaseEmbeddingFunction
 
 logger = logging.getLogger(__name__)
 
+# ChromaDB rebuilds embedding functions from the collection config on every
+# get_collection(), and each rebuild previously re-loaded the 1.2 GB weights
+# (~10 s per semantic search). One model instance per (name, device) is
+# shared process-wide: the weights are static, so sharing is exact.
+_MODEL_CACHE: dict[tuple[str, str | None], Any] = {}
+_MODEL_LOCK = threading.Lock()
 
 @register_embedding_function
 class HuggingFaceEmbeddingFunction(BaseEmbeddingFunction):
@@ -30,15 +37,23 @@ class HuggingFaceEmbeddingFunction(BaseEmbeddingFunction):
         # vector space is identical.
         self.device = device or os.environ.get("ZOTERO_EMBEDDING_DEVICE") or None
 
-        try:
-            from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading embedding model: {model_name} (device={self.device or 'auto'})")
-            if self.device:
-                self.model = SentenceTransformer(model_name, trust_remote_code=True, device=self.device)
-            else:
-                self.model = SentenceTransformer(model_name, trust_remote_code=True)
-        except ImportError:
-            raise ImportError("sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers")
+        cache_key = (model_name, self.device)
+        with _MODEL_LOCK:
+            cached = _MODEL_CACHE.get(cache_key)
+            if cached is not None:
+                self.model = cached
+                self.max_input_tokens = getattr(cached, "max_seq_length", 500)
+                return
+            try:
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"Loading embedding model: {model_name} (device={self.device or 'auto'})")
+                if self.device:
+                    self.model = SentenceTransformer(model_name, trust_remote_code=True, device=self.device)
+                else:
+                    self.model = SentenceTransformer(model_name, trust_remote_code=True)
+            except ImportError:
+                raise ImportError("sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers")
+            _MODEL_CACHE[cache_key] = self.model
 
         # Read limit from model metadata; conservative fallback
         self.max_input_tokens = getattr(self.model, "max_seq_length", 500)
